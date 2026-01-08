@@ -1,8 +1,11 @@
 name: Sync and Notify Protobufs Updates
 
+permissions:
+  contents: write # 关键修复：赋予脚本写入权限，确保能把更新 Push 回去
+
 on:
   schedule:
-    # 每 5 分钟检查一次（你可以调整为 */10 或 */15）
+    # 每 5 分钟检查一次
     - cron: '*/5 * * * *'
   workflow_dispatch:  # 允许手动触发
 
@@ -15,7 +18,9 @@ jobs:
       - name: Checkout fork
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 获取完整历史
+          ref: master             # 明确指定 master 分支
+          fetch-depth: 0          # 获取完整历史
+          token: ${{ secrets.GITHUB_TOKEN }} # 使用内置 token 鉴权
           
       # 2. 配置 Git
       - name: Configure Git
@@ -66,7 +71,8 @@ jobs:
             # 合并上游更新
             git merge upstream/master --allow-unrelated-histories -m "Sync with upstream"
             
-            # 推送到你的 fork
+            # 【这里解决了你的问题】推送到你的仓库
+            # 只有这里成功了，你的仓库才会更新，下一次就不会重复发通知了
             git push origin master
           else
             echo "ℹ️ 已是最新版本，无需更新"
