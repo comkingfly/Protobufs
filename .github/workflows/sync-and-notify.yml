@@ -1,0 +1,123 @@
+name: Sync and Notify Protobufs Updates
+
+on:
+  schedule:
+    # 每 5 分钟检查一次（你可以调整为 */10 或 */15）
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-and-notify:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. 检出你的 fork
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史
+          
+      # 2. 配置 Git
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          
+      # 3. 添加上游仓库并同步
+      - name: Sync with upstream
+        id: sync
+        run: |
+          # 添加上游仓库
+          git remote add upstream https://github.com/SteamDatabase/Protobufs.git || true
+          
+          # 获取上游最新内容
+          git fetch upstream master
+          
+          # 获取当前本地最新 commit SHA
+          CURRENT_SHA=$(git rev-parse HEAD)
+          echo "当前 SHA: $CURRENT_SHA"
+          
+          # 获取上游最新 commit SHA
+          UPSTREAM_SHA=$(git rev-parse upstream/master)
+          echo "上游 SHA: $UPSTREAM_SHA"
+          
+          # 检查是否有新更新
+          if [ "$CURRENT_SHA" != "$UPSTREAM_SHA" ]; then
+            echo "✅ 检测到新更新！"
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            
+            # 获取新 commit 的详细信息
+            COMMIT_MESSAGE=$(git log upstream/master -1 --pretty=format:"%s")
+            COMMIT_AUTHOR=$(git log upstream/master -1 --pretty=format:"%an")
+            COMMIT_DATE=$(git log upstream/master -1 --pretty=format:"%ci")
+            COMMIT_URL="https://github.com/SteamDatabase/Protobufs/commit/$UPSTREAM_SHA"
+            SHORT_SHA=$(echo $UPSTREAM_SHA | cut -c1-7)
+            
+            # 转义特殊字符（避免 JSON 格式错误）
+            COMMIT_MESSAGE=$(echo "$COMMIT_MESSAGE" | sed 's/"/\\"/g' | sed 's/\\/\\\\/g')
+            
+            echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+            echo "commit_author=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+            echo "commit_date=$COMMIT_DATE" >> $GITHUB_OUTPUT
+            echo "commit_url=$COMMIT_URL" >> $GITHUB_OUTPUT
+            echo "commit_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+            echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
+            
+            # 合并上游更新
+            git merge upstream/master --allow-unrelated-histories -m "Sync with upstream"
+            
+            # 推送到你的 fork
+            git push origin master
+          else
+            echo "ℹ️ 已是最新版本，无需更新"
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+          fi
+          
+      # 4. 发送 Discord 通知（仅当有更新时）
+      - name: Send Discord notification
+        if: steps.sync.outputs.has_updates == 'true'
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -H "Content-Type: application/json" \
+               -X POST \
+               -d "{
+                 \"content\": null,
+                 \"embeds\": [{
+                   \"title\": \"📦 Steam Protobufs 有新更新！\",
+                   \"description\": \"${{ steps.sync.outputs.commit_message }}\",
+                   \"url\": \"${{ steps.sync.outputs.commit_url }}\",
+                   \"color\": 16744272,
+                   \"fields\": [
+                     {
+                       \"name\": \"📝 提交者\",
+                       \"value\": \"${{ steps.sync.outputs.commit_author }}\",
+                       \"inline\": true
+                     },
+                     {
+                       \"name\": \"🕒 提交时间\",
+                       \"value\": \"${{ steps.sync.outputs.commit_date }}\",
+                       \"inline\": true
+                     },
+                     {
+                       \"name\": \"🔗 Commit\",
+                       \"value\": \"[\`${{ steps.sync.outputs.short_sha }}\`](${{ steps.sync.outputs.commit_url }})\"
+                     }
+                   ],
+                   \"footer\": {
+                     \"text\": \"SteamDatabase/Protobufs\",
+                     \"icon_url\": \"https://avatars.githubusercontent.com/u/8016191?s=200&v=4\"
+                   },
+                   \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+                 }]
+               }" \
+               "$DISCORD_WEBHOOK"
+               
+      # 5. 输出结果总结
+      - name: Summary
+        run: |
+          if [ "${{ steps.sync.outputs.has_updates }}" == "true" ]; then
+            echo "✅ 同步完成！已发送 Discord 通知"
+          else
+            echo "ℹ️ 无新更新"
+          fi
